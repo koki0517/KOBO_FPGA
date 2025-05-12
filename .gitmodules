@@ -1,0 +1,3 @@
+[submodule "Jikken2_FPGA"]
+	path = Jikken2_FPGA
+	url = https://github.com/koki0517/Jikken2_FPGA.git
