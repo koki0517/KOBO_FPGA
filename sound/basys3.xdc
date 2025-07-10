@@ -138,9 +138,9 @@ set_property PACKAGE_PIN U17 [get_ports {BTN[3]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {BTN[3]}]
 
 # Pmode Header JB for Speaker
-set_property PACKAGE_PIN A14 [get_ports {SPEAKER0}]
+set_property PACKAGE_PIN A11 [get_ports {SPEAKER0}]
 set_property IOSTANDARD LVCMOS33 [get_ports {SPEAKER0}]
-set_property PACKAGE_PIN B15 [get_ports {SPEAKER1}]
+set_property PACKAGE_PIN D12 [get_ports {SPEAKER1}]
 set_property IOSTANDARD LVCMOS33 [get_ports {SPEAKER1}]
 
 
@@ -302,11 +302,11 @@ set_property IOSTANDARD LVCMOS33 [get_ports {SPEAKER1}]
 
 ##USB-RS232 Interface
 ##Bank = 16, Pin name = ,					Sch name = UART_TXD_IN
-#set_property PACKAGE_PIN B18 [get_ports RsRx]
-#set_property IOSTANDARD LVCMOS33 [get_ports RsRx]
+set_property PACKAGE_PIN B18 [get_ports UART_RXD]
+set_property IOSTANDARD LVCMOS33 [get_ports UART_RXD]
 #Bank = 16, Pin name = ,					Sch name = UART_RXD_OUT
-#set_property PACKAGE_PIN A18 [get_ports UART_TXD]
-#set_property IOSTANDARD LVCMOS33 [get_ports UART_TXD]
+set_property PACKAGE_PIN B15 [get_ports UART_TXD]
+set_property IOSTANDARD LVCMOS33 [get_ports UART_TXD]
 
 
 
