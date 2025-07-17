@@ -74,3 +74,5 @@ xvlog.*
 
 ## WSL
 *.Identifier
+
+uart-system-verilog/loopback.gen/sources_1/ip/fifo_buffer
