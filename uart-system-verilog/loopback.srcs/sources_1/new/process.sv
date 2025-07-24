@@ -33,15 +33,6 @@ module processa #(
 );
 
 
-  logic [7:0] data_reg;
-  state_t state, next_state;
-  logic [15:0] speed; // deg/s 回転速度
-  logic [15:0] start_angle;
-  logic [15:0] end_angle;
-  logic [15:0] time_stamp;
-  logic [7:0] crc;
-  logic [7:0] bulk_buffer [0:44]; // 45バイト分のデータ格納用
-  polar_point polar_data_array [0:11]; // 極座標データ
 
   // type definition
   typedef enum logic [2:0] {
@@ -58,25 +49,53 @@ module processa #(
     logic [7:0] intensity;
   } polar_point;
 
+  state_t state, next_state;
+  logic [15:0] speed; // deg/s 回転速度
+  logic [15:0] start_angle;
+  logic [15:0] end_angle;
+  logic [15:0] time_stamp;
+  logic [7:0] crc;
+  logic [7:0] bulk_buffer [0:44]; // 45バイト分のデータ格納用
+  polar_point polar_data_array [0:11]; // 極座標データ
   logic [5:0] bulk_count; // 0〜45までカウント
-	logic [15:0] interval;
+  logic [15:0] interval;
 
-  assign data = data_reg;
+  // FIFO用出力カウンタ（angleのみ出力: 12点×2byte）
+  logic [4:0] out_count;
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      out_count <= 0;
+    end else if (state == STATE_WAIT && next_state == STATE_READ) begin
+      out_count <= 0;
+    end else if (re) begin
+      if (out_count < 23) // 12点×2byte-1
+        out_count <= out_count + 1;
+    end
+  end
+
+  logic [7:0] data_mux;
+  always_comb begin
+    case (out_count % 2)
+      0: data_mux = polar_data_array[out_count/2].angle[7:0];
+      1: data_mux = polar_data_array[out_count/2].angle[15:8];
+      default: data_mux = 8'h00;
+    endcase
+  end
+  assign data = data_mux;
   assign re = (state == STATE_READ || state == STATE_DATA || state == STATE_BULK_READ); // バルク読み込み時もリードイネーブル
 
   // 状態遷移
   always_ff @(posedge clk) begin
     if (rst) begin
       state <= STATE_WAIT;
-      data_reg <= 8'd0;
       bulk_count <= 6'd0;
     end else begin
       state <= next_state;
       case (state)
-        STATE_READ:  data_reg <= din; // 1バイト目受信
-        STATE_DATA:  data_reg <= din; // 2バイト目受信
+        STATE_READ: ; // 1バイト目受信
+        STATE_DATA: ; // 2バイト目受信
         STATE_BULK_READ: begin
-          data_reg <= din; // バルクデータ受信
+          // バルクデータ受信
           if (bulk_count < 6'd45) begin
             bulk_buffer[bulk_count] <= din; // 配列に格納
             bulk_count <= bulk_count + 1'b1;
@@ -98,7 +117,7 @@ module processa #(
 
             for (int i = 0; i < 12; i = i + 1) begin
               polar_data_array[i].radius <= {bulk_buffer[5 + i*3], bulk_buffer[4 + i*3]};
-							polar_data_array[i].angle <= start_angle + interval * i;
+              polar_data_array[i].angle <= start_angle + interval * i;
               polar_data_array[i].intensity <= bulk_buffer[6 + i*3];
             end
           end
