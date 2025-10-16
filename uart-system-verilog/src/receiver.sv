@@ -1,5 +1,5 @@
 module receiver #(
-  parameter [31:0] CLOCK_FREQUENCY = 32'd100_000_000,
+  parameter [31:0] CLOCK_FREQUENCY = 32'd33_000_000,
   parameter [31:0] BAUD_RATE       = 32'd230400,
   parameter [31:0] WORD_WIDTH      = 32'd8
 ) (

@@ -38,29 +38,24 @@ module loopback (
     .data_count(fifo_data_count)
   );
 
+  logic proc_wr_en;
+
   processa proc (
     .clk(clk),
     .rst(rst),
     .din(word_to_transmit),
     .empty(empty),
-    .fifo_data_count(fifo_data_count),
     .re(re),
-    .data(processed_word)
+    .dout(processed_word),
+    .wr_en(proc_wr_en)
   );
-
-  // processaのangle出力（2byte×12点）をfb_outに格納
-  // wr_en信号はreかつangle出力期間のみ有効にする
-  logic [4:0] proc_out_count;
-  assign proc_out_count = proc.out_count; // processaのカウンタを参照（必要に応じてポート追加）
-  logic wr_en_angle;
-  assign wr_en_angle = re && (proc_out_count < 24);
 
   fifo_buffer fb_out (
     .clk(clk),
     .srst(rst),
     .din(processed_word),
     .full(), // 未使用
-    .wr_en(wr_en_angle),
+    .wr_en(proc_wr_en),
     .dout(tx_fifo_out),
     .empty(tx_fifo_empty),
     .rd_en(tx_fifo_re),
