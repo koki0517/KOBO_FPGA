@@ -2,7 +2,8 @@ module loopback (
   input clk,
   input rst,
   input rxd,
-  output txd
+  output txd,
+  output [15:0] led
 );
   logic [7:0] received_word;
   logic       full;
@@ -17,7 +18,11 @@ module loopback (
   logic       tx_fifo_re;
   logic [8:0] tx_fifo_data_count;
 
-  receiver rx (
+  receiver #(
+    .CLOCK_FREQUENCY(33_000_000),
+    .BAUD_RATE(230400),
+    .WORD_WIDTH(8)
+  ) rx (
     .clk(clk),
     .rst(rst),
     .din(rxd),
@@ -38,36 +43,39 @@ module loopback (
     .data_count(fifo_data_count)
   );
 
-  processa proc (
+  logic proc_wr_en;
+  logic proc_led_enable;
+
+  processa #(
+    .CLOCK_FREQUENCY(33_000_000)
+  ) proc (
     .clk(clk),
     .rst(rst),
     .din(word_to_transmit),
     .empty(empty),
-    .fifo_data_count(fifo_data_count),
     .re(re),
-    .data(processed_word)
+    .dout(processed_word),
+    .wr_en(proc_wr_en),
+    .led_enable(proc_led_enable)
   );
-
-  // processaのangle出力（2byte×12点）をfb_outに格納
-  // wr_en信号はreかつangle出力期間のみ有効にする
-  logic [4:0] proc_out_count;
-  assign proc_out_count = proc.out_count; // processaのカウンタを参照（必要に応じてポート追加）
-  logic wr_en_angle;
-  assign wr_en_angle = re && (proc_out_count < 24);
 
   fifo_buffer fb_out (
     .clk(clk),
     .srst(rst),
     .din(processed_word),
     .full(), // 未使用
-    .wr_en(wr_en_angle),
+    .wr_en(proc_wr_en),
     .dout(tx_fifo_out),
     .empty(tx_fifo_empty),
     .rd_en(tx_fifo_re),
     .data_count(tx_fifo_data_count)
   );
 
-  transmitter tx (
+  transmitter #(
+    .CLOCK_FREQUENCY(33_000_000),
+    .BAUD_RATE(115200),
+    .WORD_WIDTH(8)
+  ) tx (
     .clk(clk),
     .rst(rst),
     .din(tx_fifo_out),
@@ -75,4 +83,21 @@ module loopback (
     .re(tx_fifo_re),
     .dout(txd)
   );
+
+  // LED Blinker - led[0]は常時有効、led[1]はプロセス制御
+  genvar i;
+  generate
+    for (i = 0; i < 16; i = i + 1) begin : led_gen
+      led_blinker #(
+        .CLOCK_FREQUENCY(33_000_000),
+        .BLINK_FREQUENCY(2)
+      ) blinker (
+        .clk(clk),
+        .rst(rst),
+        .enable(i == 0 ? 1'b1 : (i == 1 ? proc_led_enable : 1'b0)),
+        .led(led[i])
+      );
+    end
+  endgenerate
+
 endmodule
