@@ -27,43 +27,44 @@ module loopback_tb;
   // Clock generation block
   always #(CLK_PERIOD / 2.0 * 1ns) clk = ~clk;
 
-  // Main test sequence with INLINED byte sending logic
-  initial begin
-    logic [7:0] data_to_send;
-    // Bit period for 115200 bps is ~8680 ns. Hardcoding to be safe.
-    localparam BIT_PERIOD_NS = 8680; 
+  // Task to send one byte
+  task send_byte(input [7:0] data);
+    localparam BIT_PERIOD_NS = 8680; // ~1/115200 bps
+    // Start Bit
+    rx = 1'b0;
+    #(BIT_PERIOD_NS * 1ns);
+    // Data Bits
+    for (int i = 0; i < 8; i++) begin
+      rx = data[i];
+      #(BIT_PERIOD_NS * 1ns);
+    end
+    // Stop Bit
+    rx = 1'b1;
+    #(BIT_PERIOD_NS * 1ns);
+  endtask
 
-    // 1. Apply reset
+  // Main test sequence
+  initial begin
+    // 1. Reset
     rst = 1;
     #200ns;
     rst = 0;
     #1us;
 
-    // 2. Send 'A' (0x41) directly inside the initial block
-    $display("Testbench: Sending 'A' (0x41) with inlined logic...");
-    data_to_send = 8'h41;
+    // 2. Send 'T' (0x54)
+    $display("Testbench: Sending 'T' (0x54)...");
+    send_byte(8'h54);
 
-    // --- Start of byte transmission ---
-    // Start Bit
-    rx = 1'b0;
-    #(BIT_PERIOD_NS * 1ns);
+    #10us; // Wait a bit between bytes
 
-    // Data Bits (LSB first)
-    for (int i = 0; i < 8; i++) begin
-      rx = data_to_send[i];
-      #(BIT_PERIOD_NS * 1ns);
-    end
+    // 3. Send ',' (0x2c)
+    $display("Testbench: Sending ',' (0x2c)...");
+    send_byte(8'h2c);
 
-    // Stop Bit
-    rx = 1'b1;
-    #(BIT_PERIOD_NS * 1ns);
-    // --- End of byte transmission ---
-
-    // 3. Wait long enough for the byte to be received and sent back
+    // 4. Wait long enough for the response (0x08)
     #200us;
 
-    // 4. Finish the simulation
-    $display("Testbench: Simulation finished. Check the waveforms.");
+    $display("Testbench: Simulation finished. Check tx for 0x08.");
     $finish;
   end
 

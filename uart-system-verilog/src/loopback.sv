@@ -49,47 +49,25 @@ module loopback #(
     .srst(rst),
     .din(received_data),
     .wr_en(data_valid),
-    .rd_en(~fifo_in_empty), // Directly connect to fifo_in_empty to drain it
+    .rd_en(process_re),
     .dout(fifo_in_dout),
     .full(),
     .empty(fifo_in_empty)
   );
 
-  /* --- DEBUG: Bypassing process module with Corrected Pipelining--- */
-  logic [7:0] data_to_write;
-  logic       write_now;
-  logic       read_now;
-
-  // Connect control/data signals to the pipeline logic
-  assign process_re = read_now;
-  assign process_dout = data_to_write;
-  assign process_wr_en = write_now;
-  assign process_led_enable = 1'b0; // Turn off process-controlled LED
-
-  // This single block correctly pipelines the data transfer over two clock cycles
-  always_ff @(posedge clk) begin
-    if (rst) begin
-      read_now <= 1'b0;
-      write_now <= 1'b0;
-      data_to_write <= 8'h00;
-    end else begin
-      // By default, de-assert signals
-      read_now <= 1'b0;
-      write_now <= 1'b0;
-
-      // STAGE 1: If the input FIFO has data, start a read operation.
-      if (~fifo_in_empty) begin
-        read_now <= 1'b1;
-      end
-
-      // STAGE 2: If we were reading last cycle, the data is now valid.
-      // Latch the data and start the write operation to the output FIFO.
-      if (read_now) begin
-        write_now <= 1'b1;
-        data_to_write <= fifo_in_dout;
-      end
-    end
-  end
+  // Instantiate the process module
+  processa #(
+    .CLOCK_FREQUENCY(CLOCK_FREQUENCY)
+  ) i_process (
+    .clk(clk),
+    .rst(rst),
+    .din(fifo_in_dout),
+    .empty(fifo_in_empty),
+    .re(process_re),
+    .dout(process_dout),
+    .wr_en(process_wr_en),
+    .led_enable(process_led_enable)
+  );
 
   // Instantiate the OUTPUT FIFO buffer (using the same fifo_buffer IP)
   fifo_buffer i_fifo_out (
