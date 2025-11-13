@@ -1,100 +1,129 @@
-module loopback (
+`timescale 1ns / 1ps
+
+module loopback #(
+  parameter CLOCK_FREQUENCY = 32'd50_000_000,
+  parameter BAUD_RATE = 32'd115200
+) (
   input clk,
   input rst,
-  input rxd,
-  output txd,
+  input rx,
+  output tx,
   output [15:0] led
 );
-  logic [7:0] received_word;
-  logic       full;
-  logic       we;
-  logic [7:0] word_to_transmit;
-  logic       empty;
-  logic       re;
-  logic [8:0] fifo_data_count;
-  logic [7:0] processed_word;
-  logic [7:0] tx_fifo_out;
-  logic       tx_fifo_empty;
-  logic       tx_fifo_re;
-  logic [8:0] tx_fifo_data_count;
 
+  // Signals for Receiver -> Input FIFO
+  logic [7:0] received_data;
+  logic data_valid;
+
+  // Signals for Input FIFO -> Process
+  logic [7:0] fifo_in_dout;
+  logic fifo_in_empty;
+  logic process_re; // Read enable controlled by process module
+
+  // Signals for Process -> Output FIFO
+  logic [7:0] process_dout;
+  logic process_wr_en;
+  logic process_led_enable;
+
+  // Signals for Output FIFO -> Transmitter
+  logic [7:0] fifo_out_dout;
+  logic fifo_out_empty;
+  logic tx_re; // Read enable controlled by transmitter
+
+  // Instantiate the receiver
   receiver #(
-    .CLOCK_FREQUENCY(33_000_000),
-    .BAUD_RATE(230400),
-    .WORD_WIDTH(8)
-  ) rx (
+    .CLOCK_FREQUENCY(CLOCK_FREQUENCY),
+    .BAUD_RATE(BAUD_RATE)
+  ) i_receiver (
     .clk(clk),
     .rst(rst),
-    .din(rxd),
-    .dout(received_word),
-    .full(full),
-    .we(we)
+    .din(rx),
+    .dout(received_data),
+    .full(1'b0), // Assuming the receiver doesn't need backpressure for now
+    .we(data_valid)
   );
 
-  fifo_buffer fb_in (
+  // Instantiate the INPUT FIFO buffer
+  fifo_buffer i_fifo_in (
     .clk(clk),
     .srst(rst),
-    .din(received_word),
-    .full(full),
-    .wr_en(we),
-    .dout(word_to_transmit),
-    .empty(empty),
-    .rd_en(re),
-    .data_count(fifo_data_count)
+    .din(received_data),
+    .wr_en(data_valid),
+    .rd_en(~fifo_in_empty), // Directly connect to fifo_in_empty to drain it
+    .dout(fifo_in_dout),
+    .full(),
+    .empty(fifo_in_empty)
   );
 
-  logic proc_wr_en;
-  logic proc_led_enable;
+  /* --- DEBUG: Bypassing process module with Corrected Pipelining--- */
+  logic [7:0] data_to_write;
+  logic       write_now;
+  logic       read_now;
 
-  processa #(
-    .CLOCK_FREQUENCY(33_000_000)
-  ) proc (
-    .clk(clk),
-    .rst(rst),
-    .din(word_to_transmit),
-    .empty(empty),
-    .re(re),
-    .dout(processed_word),
-    .wr_en(proc_wr_en),
-    .led_enable(proc_led_enable)
-  );
+  // Connect control/data signals to the pipeline logic
+  assign process_re = read_now;
+  assign process_dout = data_to_write;
+  assign process_wr_en = write_now;
+  assign process_led_enable = 1'b0; // Turn off process-controlled LED
 
-  fifo_buffer fb_out (
+  // This single block correctly pipelines the data transfer over two clock cycles
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      read_now <= 1'b0;
+      write_now <= 1'b0;
+      data_to_write <= 8'h00;
+    end else begin
+      // By default, de-assert signals
+      read_now <= 1'b0;
+      write_now <= 1'b0;
+
+      // STAGE 1: If the input FIFO has data, start a read operation.
+      if (~fifo_in_empty) begin
+        read_now <= 1'b1;
+      end
+
+      // STAGE 2: If we were reading last cycle, the data is now valid.
+      // Latch the data and start the write operation to the output FIFO.
+      if (read_now) begin
+        write_now <= 1'b1;
+        data_to_write <= fifo_in_dout;
+      end
+    end
+  end
+
+  // Instantiate the OUTPUT FIFO buffer (using the same fifo_buffer IP)
+  fifo_buffer i_fifo_out (
     .clk(clk),
     .srst(rst),
-    .din(processed_word),
-    .full(), // 未使用
-    .wr_en(proc_wr_en),
-    .dout(tx_fifo_out),
-    .empty(tx_fifo_empty),
-    .rd_en(tx_fifo_re),
-    .data_count(tx_fifo_data_count)
+    .din(process_dout),
+    .wr_en(process_wr_en),
+    .rd_en(tx_re),
+    .dout(fifo_out_dout),
+    .full(),
+    .empty(fifo_out_empty)
   );
 
+  // Instantiate the transmitter
   transmitter #(
-    .CLOCK_FREQUENCY(33_000_000),
-    .BAUD_RATE(115200),
-    .WORD_WIDTH(8)
-  ) tx (
+    .CLOCK_FREQUENCY(CLOCK_FREQUENCY),
+    .BAUD_RATE(BAUD_RATE)
+  ) i_transmitter (
     .clk(clk),
     .rst(rst),
-    .din(tx_fifo_out),
-    .empty(tx_fifo_empty),
-    .re(tx_fifo_re),
-    .dout(txd)
+    .din(fifo_out_dout),
+    .empty(fifo_out_empty),
+    .re(tx_re),
+    .dout(tx)
   );
 
-  // LED Blinker - led[0]は常時有効、led[1]はプロセス制御
+  // LED Blinker - led[0] is always on, led[1] is controlled by process module
   genvar i;
   generate
     for (i = 0; i < 16; i = i + 1) begin : led_gen
-      led_blinker #(
-        .CLOCK_FREQUENCY(33_000_000),
-        .BLINK_FREQUENCY(2)
-      ) blinker (
+      led_blinker #(.CLOCK_FREQUENCY(CLOCK_FREQUENCY)) blinker (
         .clk(clk),
         .rst(rst),
-        .enable(i == 0 ? 1'b1 : (i == 1 ? proc_led_enable : 1'b0)),
+        .enable(i == 0 ? 1'b1 : (i == 1 ? process_led_enable : 1'b0)),
         .led(led[i])
       );
     end
