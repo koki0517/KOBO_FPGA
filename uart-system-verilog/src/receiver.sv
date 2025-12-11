@@ -10,24 +10,24 @@ module receiver #(
   input                   full,
   output                  we
 );
-  // constants
+  // 定数
   localparam [31:0] CLOCKS_PER_BIT = CLOCK_FREQUENCY / BAUD_RATE;
 
-  // type definition
+  // 型定義
   typedef enum logic [1:0] {
     STATE_WAIT         = 2'h0,
     STATE_RECEIVE_BITS = 2'h1,
     STATE_WRITE_WORD   = 2'h2
   } state_t;
 
-  // registers and wires
+  // レジスタ/ワイヤ
   state_t                state;
   logic [WORD_WIDTH+1:0] data;
   logic [31:0]           clock_counts;
   logic                  half_clock_counts;
   logic                  full_clock_counts;
 
-  // logics
+  // ロジック
   assign dout = data[WORD_WIDTH:1];
   assign we = (state == STATE_WRITE_WORD);
 

@@ -11,26 +11,26 @@ module loopback #(
   output [15:0] led
 );
 
-  // Signals for Receiver -> Input FIFO
+  // レシーバ -> 入力 FIFO の信号
   logic [7:0] received_data;
   logic data_valid;
 
-  // Signals for Input FIFO -> Process
+  // 入力 FIFO -> 処理モジュール の信号
   logic [7:0] fifo_in_dout;
   logic fifo_in_empty;
-  logic process_re; // Read enable controlled by process module
+  logic process_re; // 処理モジュールが制御する読み出しイネーブル
 
-  // Signals for Process -> Output FIFO
+  // 処理モジュール -> 出力 FIFO の信号
   logic [7:0] process_dout;
   logic process_wr_en;
   logic process_led_enable;
 
-  // Signals for Output FIFO -> Transmitter
+  // 出力 FIFO -> 送信機 の信号
   logic [7:0] fifo_out_dout;
   logic fifo_out_empty;
-  logic tx_re; // Read enable controlled by transmitter
+  logic tx_re; // 送信機が制御する読み出しイネーブル
 
-  // Instantiate the receiver
+  // レシーバのインスタンス化
   receiver #(
     .CLOCK_FREQUENCY(CLOCK_FREQUENCY),
     .BAUD_RATE(BAUD_RATE)
@@ -39,11 +39,11 @@ module loopback #(
     .rst(rst),
     .din(rx),
     .dout(received_data),
-    .full(1'b0), // Assuming the receiver doesn't need backpressure for now
+    .full(1'b0), // 今のところレシーバにバックプレッシャは不要と仮定
     .we(data_valid)
   );
 
-  // Instantiate the INPUT FIFO buffer
+  // INPUT FIFO バッファのインスタンス化
   fifo_buffer i_fifo_in (
     .clk(clk),
     .srst(rst),
@@ -55,7 +55,7 @@ module loopback #(
     .empty(fifo_in_empty)
   );
 
-  // Instantiate the process module
+  // 処理モジュールのインスタンス化
   processa #(
     .CLOCK_FREQUENCY(CLOCK_FREQUENCY)
   ) i_process (
@@ -69,7 +69,7 @@ module loopback #(
     .led_enable(process_led_enable)
   );
 
-  // Instantiate the OUTPUT FIFO buffer (using the same fifo_buffer IP)
+  // OUTPUT FIFO バッファ（同じ fifo_buffer IP を使用）のインスタンス化
   fifo_buffer i_fifo_out (
     .clk(clk),
     .srst(rst),
@@ -81,7 +81,7 @@ module loopback #(
     .empty(fifo_out_empty)
   );
 
-  // Instantiate the transmitter
+  // 送信機のインスタンス化
   transmitter #(
     .CLOCK_FREQUENCY(CLOCK_FREQUENCY),
     .BAUD_RATE(BAUD_RATE)
@@ -94,7 +94,7 @@ module loopback #(
     .dout(tx)
   );
 
-  // LED Blinker - led[0] is always on, led[1] is controlled by process module
+  // LED ブリンカー - led[0] は常時点灯, led[1] は処理モジュールで制御
   genvar i;
   generate
     for (i = 0; i < 16; i = i + 1) begin : led_gen

@@ -1,6 +1,6 @@
 module led_blinker #(
   parameter [31:0] CLOCK_FREQUENCY = 32'd33_000_000,
-  parameter [31:0] BLINK_FREQUENCY = 32'd2  // 2Hz
+  parameter [31:0] BLINK_FREQUENCY = 32'd2  // 点滅周波数 (Hz)
 ) (
   input clk,
   input rst,
