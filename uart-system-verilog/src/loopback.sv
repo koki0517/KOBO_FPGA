@@ -20,10 +20,19 @@ module loopback #(
   logic fifo_in_empty;
   logic process_re; // 処理モジュールが制御する読み出しイネーブル
 
-  // 処理モジュール -> 出力 FIFO の信号
-  logic [7:0] process_dout;
-  logic process_wr_en;
+  // processa -> processb の信号
+  logic [15:0] start_angle10;
+  logic [15:0] end_angle10;
+  logic signed [31:0] points_x_q16_16 [0:11];
+  logic signed [31:0] points_y_q16_16 [0:11];
+  logic points_valid;
+  logic points_ready;
   logic process_led_enable;
+
+  // processb -> 出力 FIFO の信号
+  logic [7:0] processb_dout;
+  logic processb_wr_en;
+  logic fifo_out_full; // 出力 FIFO が満杯かどうか
 
   // 出力 FIFO -> 送信機 の信号
   logic [7:0] fifo_out_dout;
@@ -64,20 +73,38 @@ module loopback #(
     .din(fifo_in_dout),
     .empty(fifo_in_empty),
     .re(process_re),
-    .dout(process_dout),
-    .wr_en(process_wr_en),
+    .start_angle10_out(start_angle10),
+    .end_angle10_out(end_angle10),
+    .points_x_q16_16(points_x_q16_16),
+    .points_y_q16_16(points_y_q16_16),
+    .points_valid(points_valid),
+    .points_ready(points_ready),
     .led_enable(process_led_enable)
+  );
+
+  processb i_processb (
+    .clk(clk),
+    .rst(rst),
+    .start_angle10_in(start_angle10),
+    .end_angle10_in(end_angle10),
+    .points_x_q16_16(points_x_q16_16),
+    .points_y_q16_16(points_y_q16_16),
+    .points_valid(points_valid),
+    .points_ready(points_ready),
+    .dout(processb_dout),
+    .wr_en(processb_wr_en),
+    .fifo_out_full(fifo_out_full)
   );
 
   // OUTPUT FIFO バッファ（同じ fifo_buffer IP を使用）のインスタンス化
   fifo_buffer i_fifo_out (
     .clk(clk),
     .srst(rst),
-    .din(process_dout),
-    .wr_en(process_wr_en),
+    .din(processb_dout),
+    .wr_en(processb_wr_en),
     .rd_en(tx_re),
     .dout(fifo_out_dout),
-    .full(),
+    .full(fifo_out_full),
     .empty(fifo_out_empty)
   );
 
