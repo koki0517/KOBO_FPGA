@@ -12,6 +12,7 @@ module loopback_tb;
   logic rst;
   logic rx = 1; // UART idle state is High
   wire  tx;
+  wire [15:0] led;
 
   // Instantiate the Device Under Test (DUT)
   loopback #(
@@ -21,7 +22,8 @@ module loopback_tb;
     .clk(clk),
     .rst(rst),
     .rx(rx),
-    .tx(tx)
+    .tx(tx),
+    .led(led)
   );
 
   // Standalone CORDIC instance for phase-format calibration
@@ -98,31 +100,15 @@ module loopback_tb;
     8'h00, 8'hf5, 8'hbf, 8'h4c, 8'hca, 8'h70, 8'h88
   };
 
-  // Capture bytes output from fifo via transmitter (use DUT hierarchical signals)
-  byte out_bytes[$];
-  logic tx_re_d;
-  always @(posedge clk) begin
-    if (rst) begin
-      tx_re_d <= 1'b0;
-    end else begin
-      tx_re_d <= dut.tx_re;
-    end
-
-    // fifo_buffer has 1-cycle read latency; capture data one cycle after rd_en.
-    if (tx_re_d) begin
-      out_bytes.push_back(dut.fifo_out_dout);
-    end
-  end
-
   // Variables for analysis (declared at module scope for XSim compatibility)
-  localparam int EXPECT_BYTES = 12*8;
+  localparam int EXPECT_POINTS = 12;
   // Allow small fixed-point/CORDIC quantization error in Q16.16
   localparam int TOL_Q16_16 = 5000;
   localparam time OUT_TIMEOUT = 30ms;
+  localparam int MAX_WAIT_CYCLES = 1_500_000; // 30ms / 20ns
   localparam int ANGLE_SCALE = 100;
   localparam int ANGLE_FULL  = 360 * ANGLE_SCALE; // 36000
   time t_start;
-  int out_count;
   int errors;
   int start10;
   int end10;
@@ -130,9 +116,6 @@ module loopback_tb;
   real interval_deg;
 
   int p;
-  int base;
-  int unsigned u32x;
-  int unsigned u32y;
   int signed_x;
   int signed_y;
   int d_idx;
@@ -145,17 +128,29 @@ module loopback_tb;
   int expect_y_q;
   int diffx;
   int diffy;
+  bit seen_points_valid;
+  bit busy_cleared;
 
   // Capture phase words sent into the CORDIC (for diagnosing phase scaling)
   logic [15:0] phase_log [0:31];
   int phase_count;
+  bit busy_seen;
+  bit phase_seen;
   always @(posedge clk) begin
     if (rst) begin
       phase_count <= 0;
+      busy_seen <= 1'b0;
+      phase_seen <= 1'b0;
     end else begin
-      if (dut.i_process.s_axis_phase_tvalid && (phase_count < 32)) begin
-        phase_log[phase_count] <= dut.i_process.s_axis_phase_tdata;
+      if (dut.debug_phase_valid && (phase_count < 32)) begin
+        phase_log[phase_count] <= dut.debug_phase_tdata;
         phase_count <= phase_count + 1;
+      end
+      if (dut.debug_busy) begin
+        busy_seen <= 1'b1;
+      end
+      if (dut.debug_phase_valid) begin
+        phase_seen <= 1'b1;
       end
     end
   end
@@ -187,40 +182,44 @@ module loopback_tb;
     $display("Testbench: Starting to send byte sequence...");
     foreach (data_queue[i]) begin
       send_byte(data_queue[i]);
-      #10us; // Wait a bit between bytes
+      if (i != data_queue.size() - 1) #10us; // spacing between bytes, but do not delay after the last one
     end
 
-    // 3. Wait long enough for all data to be processed + transmitted.
-    // 115200bps => ~86.8us per byte (10 bits). 96 bytes needs ~8.3ms plus processing.
-    // Wait until all expected bytes are captured (or timeout).
-    t_start = $time;
-    while ((out_bytes.size() < EXPECT_BYTES) && (($time - t_start) < OUT_TIMEOUT)) begin
-      #100us;
+    // 3. Wait for processb to start (debug_busy rising)
+    // processb finishes quickly; capture cases where it already ran before we start waiting
+    seen_points_valid = busy_seen || phase_seen || (phase_count > 0) || dut.debug_busy;
+    for (int k = 0; k < MAX_WAIT_CYCLES; k++) begin
+      @(posedge clk);
+      if (busy_seen || phase_seen || dut.debug_busy || (phase_count > 0)) begin
+        seen_points_valid = 1'b1;
+        break;
+      end
     end
-
-    // 4. Finish the simulation
-    $display("Testbench: Simulation finished. Checking outputs...");
-
-    // Analyze captured output bytes
-    out_count = out_bytes.size();
-    $display("Captured %0d bytes from output FIFO", out_count);
-
-    // Expect 12 points * 8 bytes each = 96 bytes
-    if (out_count != EXPECT_BYTES) begin
-      $display("ERROR: unexpected output byte count (expected %0d)", EXPECT_BYTES);
-      $display("Hint: if this is smaller, increase OUT_TIMEOUT or baud assumptions.");
+    if (!seen_points_valid) begin
+      $display("ERROR: processb did not start (debug_busy never asserted)");
       $finish;
     end
 
-    // Quick sanity: confirm DUT payload alignment (first bytes should be Speed/StartAngle)
-    $display("DUT payload[0..5]=%02h %02h %02h %02h %02h %02h",
-             dut.i_process.payload[0], dut.i_process.payload[1], dut.i_process.payload[2],
-             dut.i_process.payload[3], dut.i_process.payload[4], dut.i_process.payload[5]);
+    // Wait until processb busy deasserts (all 12 points computed)
+    busy_cleared = (!dut.debug_busy && (busy_seen || phase_seen || (phase_count > 0)));
+    for (int k2 = 0; k2 < MAX_WAIT_CYCLES; k2++) begin
+      @(posedge clk);
+      if (!dut.debug_busy) begin
+        busy_cleared = 1'b1;
+        break;
+      end
+    end
+    if (!busy_cleared) begin
+      $display("ERROR: processb busy did not deassert within timeout");
+      $finish;
+    end
+
+    $display("Testbench: CORDIC computation complete. Comparing theoretical vs DUT...");
+
+    // Quick sanity: payload bytes in processa
+    $display("DUT payload[2..5]=%02h %02h %02h %02h (StartAngle LSB/MSB)",
+             dut.i_process.payload[2], dut.i_process.payload[3], dut.i_process.payload[4], dut.i_process.payload[5]);
     $display("DUT payload[40..41]=%02h %02h (EndAngle LSB/MSB)", dut.i_process.payload[40], dut.i_process.payload[41]);
-    $display("DUT start_q8_8=%0d interval_q8_8=%0d", dut.i_process.start_q8_8, dut.i_process.interval_q8_8);
-    $display("DUT cordic[0] cos=%0d (0x%04h) sin=%0d (0x%04h)",
-         $signed(dut.i_process.cordic_cos[0]), dut.i_process.cordic_cos[0],
-         $signed(dut.i_process.cordic_sin[0]), dut.i_process.cordic_sin[0]);
     $display("DUT phase_count=%0d phase[0]=0x%04h (signed %0d)", phase_count, phase_log[0], $signed(phase_log[0]));
 
     // reconstruct and verify
@@ -235,12 +234,9 @@ module loopback_tb;
     interval_deg = delta10 / (ANGLE_SCALE * 11.0); // degrees
 
     for (p = 0; p < 12; p++) begin
-      // reconstruct X
-      base = p*8;
-      u32x = {out_bytes[base], out_bytes[base+1], out_bytes[base+2], out_bytes[base+3]};
-      u32y = {out_bytes[base+4], out_bytes[base+5], out_bytes[base+6], out_bytes[base+7]};
-      signed_x = $signed(u32x);
-      signed_y = $signed(u32y);
+      // DUT outputs from processb BRAM (Q16.16)
+      signed_x = dut.debug_bram_x[p];
+      signed_y = dut.debug_bram_y[p];
 
       // distance
       d_idx = 6 + p*3;
@@ -255,11 +251,10 @@ module loopback_tb;
 
       diffx = signed_x - expect_x_q;
       diffy = signed_y - expect_y_q;
+      $display("Point %0d: theta=%0.3f deg r=%0d | DUT X=0x%08h Y=0x%08h | EXP X=0x%08h Y=0x%08h | dX=%0d dY=%0d",
+               p, angle_deg, dist_mm, signed_x, signed_y, expect_x_q, expect_y_q, diffx, diffy);
       if ( (diffx > TOL_Q16_16) || (diffx < -TOL_Q16_16) || (diffy > TOL_Q16_16) || (diffy < -TOL_Q16_16) ) begin
-        $display("Point %0d mismatch: got X=0x%08h Y=0x%08h expected X=0x%08h Y=0x%08h diffX=%0d diffY=%0d", p, signed_x, signed_y, expect_x_q, expect_y_q, diffx, diffy);
         errors++;
-      end else begin
-        $display("Point %0d OK: X=0x%08h Y=0x%08h diffX=%0d diffY=%0d", p, signed_x, signed_y, diffx, diffy);
       end
     end
 

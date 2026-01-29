@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+`include "processb.sv"
+
 module loopback #(
   parameter CLOCK_FREQUENCY = 32'd50_000_000,
   parameter BAUD_RATE = 32'd115200
@@ -8,7 +10,13 @@ module loopback #(
   input rst,
   input rx,
   output tx,
-  output [15:0] led
+  output [15:0] led,
+  // デバッグ出力（テストベンチ用）
+  output debug_busy,
+  output debug_phase_valid,
+  output [15:0] debug_phase_tdata,
+  output signed [31:0] debug_bram_x [0:11],
+  output signed [31:0] debug_bram_y [0:11]
 );
 
   // レシーバ -> 入力 FIFO の信号
@@ -33,6 +41,7 @@ module loopback #(
   logic [7:0] processb_dout;
   logic processb_wr_en;
   logic fifo_out_full; // 出力 FIFO が満杯かどうか
+  logic full_turn_pulse;
 
   // 出力 FIFO -> 送信機 の信号
   logic [7:0] fifo_out_dout;
@@ -93,7 +102,11 @@ module loopback #(
     .points_ready(points_ready),
     .dout(processb_dout),
     .wr_en(processb_wr_en),
-    .fifo_out_full(fifo_out_full)
+    .debug_busy(debug_busy),
+    .debug_phase_valid(debug_phase_valid),
+    .debug_phase_tdata(debug_phase_tdata),
+    .debug_bram_x(debug_bram_x),
+    .debug_bram_y(debug_bram_y)
   );
 
   // OUTPUT FIFO バッファ（同じ fifo_buffer IP を使用）のインスタンス化
