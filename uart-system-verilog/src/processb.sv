@@ -3,8 +3,8 @@
 module processb (
   input  logic        clk,
   input  logic        rst,
-  input  logic [15:0] start_angle10_in,   // 0.1度単位 (例: 180度 -> 1800)
-  input  logic [15:0] end_angle10_in,     // 0.1度単位
+  input  logic [15:0] start_angle10_in,   // 0.01度単位 (例: 180度 -> 18000)
+  input  logic [15:0] end_angle10_in,     // 0.01度単位
   // points_x_q16_16 は距離 r を Q16.16 として受け取る想定
   input  logic signed [31:0] points_x_q16_16 [0:11],
   // points_y_q16_16 は未使用 (強度など) として受け取る想定
@@ -19,17 +19,19 @@ module processb (
   output logic        debug_phase_valid,
   output logic [15:0] debug_phase_tdata,
   output logic signed [31:0] debug_bram_x [0:11],
-  output logic signed [31:0] debug_bram_y [0:11]
+  output logic signed [31:0] debug_bram_y [0:11],
+  // 最終計算結果出力
+  output logic        result_valid,
+  output logic signed [31:0] result_x [0:11],
+  output logic signed [31:0] result_y [0:11]
 );
 
   localparam int NUM_POINTS = 12;
-  localparam int ANGLE_MAX_10 = 3600; // 0.1度単位で360度
+  localparam int ANGLE_MAX_10 = 36000; // 0.01度単位で360度
 
-  // CORDIC (Sin/Cos) の位相フォーマット: Scaled Radians (pi radians)
-  // 角度(0.1度) -> scaled radians: angle10 / 1800
-  // 16bit Q3.13 に変換する
-  localparam int PHASE_Q_FRAC = 13;
-  localparam int PHASE_SCALE_DEN = 1800 * (1 << 16); // angle10_q16_16 の分母
+  // CORDIC (Sin/Cos) の位相フォーマット: Scaled Radians
+  // 2^15 = 180度 (半周), 位相 = angle_degrees / 180 * 32768
+  // angle10_q16_16(0.01度, Q16.16) -> phase = angle10_q16_16 / 18000
 
   // BRAM (推論) - 計算した x,y を保存
   (* ram_style = "block" *) logic signed [31:0] bram_x_q16_16 [0:NUM_POINTS-1];
@@ -53,8 +55,8 @@ module processb (
   logic        cordic_valid;
   logic [31:0] cordic_tdata;
 
-  // CORDIC インスタンス
-  cordic_0 i_cordic (
+  // CORDIC インスタンス (自作)
+  cordic_sincos i_cordic (
     .aclk(clk),
     .s_axis_phase_tvalid(phase_valid),
     .s_axis_phase_tdata(phase_tdata),
@@ -79,21 +81,37 @@ module processb (
     end
   endgenerate
 
+  generate
+    for (gi = 0; gi < NUM_POINTS; gi = gi + 1) begin : result_bram_copy
+      assign result_x[gi] = bram_x_q16_16[gi];
+      assign result_y[gi] = bram_y_q16_16[gi];
+    end
+  endgenerate
+
   // points_ready: idle のとき受け入れ可能
   assign points_ready = ~busy;
 
-  // 角度(0.1度, Q16.16) -> CORDIC Phase (Q3.13, scaled radians)
-  function automatic logic [15:0] angle10_q16_16_to_phase(
+  // 角度(0.01度, Q16.16) -> CORDIC Phase (signed 16bit, 2^15 = 180度)
+  // CORDICは入力位相を[-π, +π)として扱う
+  function automatic logic signed [15:0] angle10_q16_16_to_phase(
     input logic signed [31:0] angle10_q16_16_in
   );
-    logic signed [63:0] num;
-    logic signed [63:0] tmp;
+    logic signed [31:0] angle_wrapped;
+    logic signed [63:0] phase_tmp;
     begin
-      // scaled = angle10 / 1800
-      // Q3.13 = scaled * 2^13
-      num = angle10_q16_16_in * (1 << PHASE_Q_FRAC);
-      tmp = num / PHASE_SCALE_DEN;
-      angle10_q16_16_to_phase = tmp[15:0];
+      // wrap to [-18000, +18000) centi-degrees (represents -180 to +180 deg)
+      angle_wrapped = angle10_q16_16_in;
+      if (angle_wrapped >= (18000 <<< 16)) begin
+        angle_wrapped = angle_wrapped - (36000 <<< 16);
+      end
+      if (angle_wrapped < -(18000 <<< 16)) begin
+        angle_wrapped = angle_wrapped + (36000 <<< 16);
+      end
+
+      // 直接変換: phase = angle_centi_deg * 2^15 / 18000
+      // angle_wrapped は Q16.16 なので * 32768 / (18000 * 65536)
+      phase_tmp = (angle_wrapped * 32768) / (18000 <<< 16);
+      angle10_q16_16_to_phase = phase_tmp[15:0];
     end
   endfunction
 
@@ -123,12 +141,14 @@ module processb (
       send_index <= 4'd0;
       recv_index <= 4'd0;
       busy <= 1'b0;
+      result_valid <= 1'b0;
       for (i = 0; i < NUM_POINTS; i = i + 1) begin
         r_points[i] <= 32'sd0;
         bram_x_q16_16[i] <= 32'sd0;
         bram_y_q16_16[i] <= 32'sd0;
       end
     end else begin
+      result_valid <= 1'b0;
       if (points_valid && points_ready) begin
         start_angle10_reg <= start_angle10_in;
         end_angle10_reg <= end_angle10_in;
@@ -143,16 +163,18 @@ module processb (
 
       // CORDIC 出力を受け取ったら x,y を計算して BRAM に格納
       if (cordic_valid && busy) begin
-        logic signed [31:0] cos_q2_14;
-        logic signed [31:0] sin_q2_14;
+        logic signed [31:0] cos_q1_15;
+        logic signed [31:0] sin_q1_15;
         logic signed [63:0] x_mult;
         logic signed [63:0] y_mult;
 
-        cos_q2_14 = {{16{cordic_tdata[31]}}, cordic_tdata[31:16]};
-        sin_q2_14 = {{16{cordic_tdata[15]}}, cordic_tdata[15:0]};
+        // Xilinx CORDIC: [31:16]=cos, [15:0]=sin (verify with IP settings)
+        // Output format is Q2.14 (scale factor = 16384)
+        cos_q1_15 = {{16{cordic_tdata[31]}}, cordic_tdata[31:16]};
+        sin_q1_15 = {{16{cordic_tdata[15]}}, cordic_tdata[15:0]};
 
-        x_mult = r_points[recv_index] * cos_q2_14;
-        y_mult = r_points[recv_index] * sin_q2_14;
+        x_mult = r_points[recv_index] * cos_q1_15;
+        y_mult = r_points[recv_index] * sin_q1_15;
 
         // Q16.16 (r) * Q2.14 (sin/cos) -> Q18.30
         // Q16.16 に戻すため >> 14
@@ -160,6 +182,7 @@ module processb (
         bram_y_q16_16[recv_index] <= y_mult >>> 14;
 
         if (recv_index == NUM_POINTS - 1) begin
+          result_valid <= 1'b1;
           busy <= 1'b0;
         end else begin
           recv_index <= recv_index + 4'd1;
@@ -168,7 +191,7 @@ module processb (
 
       // CORDIC へ位相を送るたびにインデックスを進める
       if (busy && phase_valid) begin
-        if (send_index < NUM_POINTS - 1) begin
+        if (send_index < NUM_POINTS) begin
           send_index <= send_index + 4'd1;
         end
       end

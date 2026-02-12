@@ -1,10 +1,11 @@
 `timescale 1ns / 1ps
 
 `include "processb.sv"
+`include "processc.sv"
 
 module loopback #(
   parameter CLOCK_FREQUENCY = 32'd50_000_000,
-  parameter BAUD_RATE = 32'd115200
+  parameter BAUD_RATE = 32'd230400
 ) (
   input clk,
   input rst,
@@ -16,7 +17,20 @@ module loopback #(
   output debug_phase_valid,
   output [15:0] debug_phase_tdata,
   output signed [31:0] debug_bram_x [0:11],
-  output signed [31:0] debug_bram_y [0:11]
+  output signed [31:0] debug_bram_y [0:11],
+  // 最終計算結果出力
+  output result_valid,
+  output signed [31:0] result_x [0:11],
+  output signed [31:0] result_y [0:11],
+  // 3パケット分の保持結果出力
+  output result3_valid,
+  output signed [31:0] result3_x [0:2][0:11],
+  output signed [31:0] result3_y [0:2][0:11],
+  // 特徴点出力
+  output feature_valid,
+  output [5:0] feature_count,
+  output signed [31:0] feature_x [0:35],
+  output signed [31:0] feature_y [0:35]
 );
 
   // レシーバ -> 入力 FIFO の信号
@@ -42,6 +56,10 @@ module loopback #(
   logic processb_wr_en;
   logic fifo_out_full; // 出力 FIFO が満杯かどうか
   logic full_turn_pulse;
+
+  // processc -> 出力 FIFO の信号
+  logic [7:0] processc_dout;
+  logic processc_wr_en;
 
   // 出力 FIFO -> 送信機 の信号
   logic [7:0] fifo_out_dout;
@@ -106,15 +124,36 @@ module loopback #(
     .debug_phase_valid(debug_phase_valid),
     .debug_phase_tdata(debug_phase_tdata),
     .debug_bram_x(debug_bram_x),
-    .debug_bram_y(debug_bram_y)
+    .debug_bram_y(debug_bram_y),
+    .result_valid(result_valid),
+    .result_x(result_x),
+    .result_y(result_y)
+  );
+
+  processc i_processc (
+    .clk(clk),
+    .rst(rst),
+    .result_valid(result_valid),
+    .result_x(result_x),
+    .result_y(result_y),
+    .out_valid(result3_valid),
+    .out_x(result3_x),
+    .out_y(result3_y),
+    .feature_valid(feature_valid),
+    .feature_count(feature_count),
+    .feature_x(feature_x),
+    .feature_y(feature_y),
+    .fifo_full(fifo_out_full),
+    .fifo_dout(processc_dout),
+    .fifo_wr_en(processc_wr_en)
   );
 
   // OUTPUT FIFO バッファ（同じ fifo_buffer IP を使用）のインスタンス化
   fifo_buffer i_fifo_out (
     .clk(clk),
     .srst(rst),
-    .din(processb_dout),
-    .wr_en(processb_wr_en),
+    .din(processc_dout),
+    .wr_en(processc_wr_en),
     .rd_en(tx_re),
     .dout(fifo_out_dout),
     .full(fifo_out_full),
